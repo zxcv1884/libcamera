@@ -5,8 +5,9 @@
  * media_device.cpp - Media device handler
  */
 
-#include "libcamera/internal/media_device.h"
+#include "media_device.h"
 
+#include <iostream>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -17,8 +18,10 @@
 #include <vector>
 
 #include <linux/media.h>
-
-#include <libcamera/base/log.h>
+#  define MEDIA_LNK_FL_ANCILLARY_LINK       (2 << 28)
+#define MEDIA_V2_ENTITY_HAS_FLAGS(media_version) \
+    ((media_version) >= ((4 << 16) | (19 << 8) | 0))
+//#include <libcamera/base/log.h>
 
 /**
  * \file media_device.h
@@ -28,7 +31,7 @@
 
 namespace libcamera {
 
-LOG_DEFINE_CATEGORY(MediaDevice)
+//LOG_DEFINE_CATEGORY(MediaDevice)
 
 /**
  * \class MediaDevice
@@ -63,20 +66,20 @@ LOG_DEFINE_CATEGORY(MediaDevice)
  * populate() before the media graph can be queried.
  */
 MediaDevice::MediaDevice(const std::string &deviceNode)
-	: deviceNode_(deviceNode), valid_(false), acquired_(false)
+    : deviceNode_(deviceNode), valid_(false), acquired_(false)
 {
 }
 
 MediaDevice::~MediaDevice()
 {
-	fd_.reset();
-	clear();
+    fd_ = -1;
+    clear();
 }
 
-std::string MediaDevice::logPrefix() const
-{
-	return deviceNode() + "[" + driver() + "]";
-}
+//std::string MediaDevice::logPrefix() const
+//{
+//    return deviceNode() + "[" + driver() + "]";
+//}
 
 /**
  * \brief Claim a device for exclusive use
@@ -102,14 +105,14 @@ std::string MediaDevice::logPrefix() const
  */
 bool MediaDevice::acquire()
 {
-	if (acquired_)
-		return false;
+    if (acquired_)
+        return false;
 
-	if (open())
-		return false;
+    if (open())
+        return false;
 
-	acquired_ = true;
-	return true;
+    acquired_ = true;
+    return true;
 }
 
 /**
@@ -118,8 +121,8 @@ bool MediaDevice::acquire()
  */
 void MediaDevice::release()
 {
-	close();
-	acquired_ = false;
+    close();
+    acquired_ = false;
 }
 
 /**
@@ -141,13 +144,13 @@ void MediaDevice::release()
  */
 bool MediaDevice::lock()
 {
-	if (!fd_.isValid())
-		return false;
+    if (fd_ <= 0)
+        return false;
 
-	if (lockf(fd_.get(), F_TLOCK, 0))
-		return false;
+    if (lockf(fd_, F_TLOCK, 0))
+        return false;
 
-	return true;
+    return true;
 }
 
 /**
@@ -161,10 +164,10 @@ bool MediaDevice::lock()
  */
 void MediaDevice::unlock()
 {
-	if (!fd_.isValid())
-		return;
+    if (fd_ <= 0)
+        return;
 
-	lockf(fd_.get(), F_ULOCK, 0);
+    lockf(fd_, F_ULOCK, 0);
 }
 
 /**
@@ -192,90 +195,88 @@ void MediaDevice::unlock()
  */
 int MediaDevice::populate()
 {
-	struct media_v2_topology topology = {};
-	struct media_v2_entity *ents = nullptr;
-	struct media_v2_interface *interfaces = nullptr;
-	struct media_v2_link *links = nullptr;
-	struct media_v2_pad *pads = nullptr;
-	__u64 version = -1;
-	int ret;
+    struct media_v2_topology topology = {};
+    struct media_v2_entity *ents = nullptr;
+    struct media_v2_interface *interfaces = nullptr;
+    struct media_v2_link *links = nullptr;
+    struct media_v2_pad *pads = nullptr;
+    __u64 version = -1;
+    int ret;
 
-	clear();
+    clear();
 
-	ret = open();
-	if (ret)
-		return ret;
+    ret = open();
+    if (ret)
+        return ret;
 
-	struct media_device_info info = {};
-	ret = ioctl(fd_.get(), MEDIA_IOC_DEVICE_INFO, &info);
-	if (ret) {
-		ret = -errno;
-		LOG(MediaDevice, Error)
-			<< "Failed to get media device info " << strerror(-ret);
-		goto done;
-	}
+    struct media_device_info info = {};
+    ret = ioctl(fd_, MEDIA_IOC_DEVICE_INFO, &info);
+    if (ret) {
+        ret = -errno;
+//        std::cout << "Failed to get media device info " << strerror(-ret) << std::endl;
+        goto done;
+    }
 
-	driver_ = info.driver;
-	model_ = info.model;
-	version_ = info.media_version;
-	hwRevision_ = info.hw_revision;
+    driver_ = info.driver;
+    model_ = info.model;
+    version_ = info.media_version;
+    hwRevision_ = info.hw_revision;
+    /*
+     * Keep calling G_TOPOLOGY until the version number stays stable.
+     */
+    while (true) {
+        topology.topology_version = 0;
+        topology.ptr_entities = reinterpret_cast<uintptr_t>(ents);
+        topology.ptr_interfaces = reinterpret_cast<uintptr_t>(interfaces);
+        topology.ptr_links = reinterpret_cast<uintptr_t>(links);
+        topology.ptr_pads = reinterpret_cast<uintptr_t>(pads);
 
-	/*
-	 * Keep calling G_TOPOLOGY until the version number stays stable.
-	 */
-	while (true) {
-		topology.topology_version = 0;
-		topology.ptr_entities = reinterpret_cast<uintptr_t>(ents);
-		topology.ptr_interfaces = reinterpret_cast<uintptr_t>(interfaces);
-		topology.ptr_links = reinterpret_cast<uintptr_t>(links);
-		topology.ptr_pads = reinterpret_cast<uintptr_t>(pads);
+        ret = ioctl(fd_, MEDIA_IOC_G_TOPOLOGY, &topology);
+        if (ret < 0) {
+            ret = -errno;
+            //            LOG(MediaDevice, Error)
+            //                    << "Failed to enumerate topology: "
+            //                    << strerror(-ret);
+            goto done;
+        }
 
-		ret = ioctl(fd_.get(), MEDIA_IOC_G_TOPOLOGY, &topology);
-		if (ret < 0) {
-			ret = -errno;
-			LOG(MediaDevice, Error)
-				<< "Failed to enumerate topology: "
-				<< strerror(-ret);
-			goto done;
-		}
+        if (version == topology.topology_version)
+            break;
 
-		if (version == topology.topology_version)
-			break;
+        delete[] ents;
+        delete[] interfaces;
+        delete[] pads;
+        delete[] links;
 
-		delete[] ents;
-		delete[] interfaces;
-		delete[] pads;
-		delete[] links;
+        ents = new struct media_v2_entity[topology.num_entities]();
+        interfaces = new struct media_v2_interface[topology.num_interfaces]();
+        links = new struct media_v2_link[topology.num_links]();
+        pads = new struct media_v2_pad[topology.num_pads]();
 
-		ents = new struct media_v2_entity[topology.num_entities]();
-		interfaces = new struct media_v2_interface[topology.num_interfaces]();
-		links = new struct media_v2_link[topology.num_links]();
-		pads = new struct media_v2_pad[topology.num_pads]();
+        version = topology.topology_version;
+    }
 
-		version = topology.topology_version;
-	}
+    /* Populate entities, pads and links. */
+    if (populateEntities(topology) &&
+            populatePads(topology) &&
+            populateLinks(topology))
+        valid_ = true;
 
-	/* Populate entities, pads and links. */
-	if (populateEntities(topology) &&
-	    populatePads(topology) &&
-	    populateLinks(topology))
-		valid_ = true;
-
-	ret = 0;
+    ret = 0;
 done:
-	close();
+    close();
 
-	delete[] ents;
-	delete[] interfaces;
-	delete[] pads;
-	delete[] links;
+    delete[] ents;
+    delete[] interfaces;
+    delete[] pads;
+    delete[] links;
 
-	if (!valid_) {
-		clear();
-		return -EINVAL;
-	}
+    if (!valid_) {
+        clear();
+        return -EINVAL;
+    }
 
-	return ret;
+    return ret;
 }
 
 /**
@@ -331,14 +332,59 @@ done:
  * \param[in] name The entity name
  * \return The entity with \a name, or nullptr if no such entity is found
  */
+
+MediaEntity *MediaDevice::getEntityById(const int id) const
+{
+    for (MediaEntity *e : entities_)
+        if (e->id() == id)
+            return e;
+
+    return nullptr;
+}
+
 MediaEntity *MediaDevice::getEntityByName(const std::string &name) const
 {
-	for (MediaEntity *e : entities_)
-		if (e->name() == name)
-			return e;
+    for (MediaEntity *e : entities_)
+        if (e->name() == name)
+            return e;
 
-	return nullptr;
+    return nullptr;
 }
+
+MediaEntity *MediaDevice::getEntityByVideoNode(const int &videoNode) const
+{
+    for (MediaEntity *e : entities_)
+        if (e->deviceMinor() == videoNode && e->type() == MediaEntity::Type::V4L2VideoDevice)
+            return e;
+    return nullptr;
+}
+
+int MediaDevice::getSensorEntityIdxByEntity(MediaEntity *mediaEntity)
+{
+    visitedEntities.clear();
+    return getSensorEntityIdxByEntityHelper(mediaEntity);
+}
+
+int MediaDevice::getSensorEntityIdxByEntityHelper(MediaEntity *mediaEntity)
+{
+    int idx = -1;
+    if (!mediaEntity || visitedEntities.find(mediaEntity->id()) != visitedEntities.end()) return -1;
+    visitedEntities.insert(mediaEntity->id());
+    if (mediaEntity->name().find("tevi-") != std::string::npos || mediaEntity->name().find("TEVI-") != std::string::npos) return mediaEntity->id();
+    if (mediaEntity->pads().empty()) return -1;
+    for (auto &pad : mediaEntity->pads()) {
+        if (!pad || pad->links().empty()) continue;
+        for (auto &link : pad->links()) {
+            if (!link || !link->source()) continue;
+            idx = getSensorEntityIdxByEntityHelper(link->source()->entity());
+            if (idx > -1) {
+                return idx;
+            }
+        }
+    }
+    return idx;
+}
+
 
 /**
  * \brief Retrieve the MediaLink connecting two pads, identified by entity
@@ -360,14 +406,14 @@ MediaEntity *MediaDevice::getEntityByName(const std::string &name) const
  * exists
  */
 MediaLink *MediaDevice::link(const std::string &sourceName, unsigned int sourceIdx,
-			     const std::string &sinkName, unsigned int sinkIdx)
+                             const std::string &sinkName, unsigned int sinkIdx)
 {
-	const MediaEntity *source = getEntityByName(sourceName);
-	const MediaEntity *sink = getEntityByName(sinkName);
-	if (!source || !sink)
-		return nullptr;
+    const MediaEntity *source = getEntityByName(sourceName);
+    const MediaEntity *sink = getEntityByName(sinkName);
+    if (!source || !sink)
+        return nullptr;
 
-	return link(source, sourceIdx, sink, sinkIdx);
+    return link(source, sourceIdx, sink, sinkIdx);
 }
 
 /**
@@ -390,15 +436,15 @@ MediaLink *MediaDevice::link(const std::string &sourceName, unsigned int sourceI
  * exists
  */
 MediaLink *MediaDevice::link(const MediaEntity *source, unsigned int sourceIdx,
-			     const MediaEntity *sink, unsigned int sinkIdx)
+                             const MediaEntity *sink, unsigned int sinkIdx)
 {
 
-	const MediaPad *sourcePad = source->getPadByIndex(sourceIdx);
-	const MediaPad *sinkPad = sink->getPadByIndex(sinkIdx);
-	if (!sourcePad || !sinkPad)
-		return nullptr;
+    const MediaPad *sourcePad = source->getPadByIndex(sourceIdx);
+    const MediaPad *sinkPad = sink->getPadByIndex(sinkIdx);
+    if (!sourcePad || !sinkPad)
+        return nullptr;
 
-	return link(sourcePad, sinkPad);
+    return link(sourcePad, sinkPad);
 }
 
 /**
@@ -416,12 +462,12 @@ MediaLink *MediaDevice::link(const MediaEntity *source, unsigned int sourceIdx,
  */
 MediaLink *MediaDevice::link(const MediaPad *source, const MediaPad *sink)
 {
-	for (MediaLink *link : source->links()) {
-		if (link->sink()->id() == sink->id())
-			return link;
-	}
+    for (MediaLink *link : source->links()) {
+        if (link->sink()->id() == sink->id())
+            return link;
+    }
 
-	return nullptr;
+    return nullptr;
 }
 
 /**
@@ -434,23 +480,23 @@ MediaLink *MediaDevice::link(const MediaPad *source, const MediaPad *sink)
  */
 int MediaDevice::disableLinks()
 {
-	for (MediaEntity *entity : entities_) {
-		for (MediaPad *pad : entity->pads()) {
-			if (!(pad->flags() & MEDIA_PAD_FL_SOURCE))
-				continue;
+    for (MediaEntity *entity : entities_) {
+        for (MediaPad *pad : entity->pads()) {
+            if (!(pad->flags() & MEDIA_PAD_FL_SOURCE))
+                continue;
 
-			for (MediaLink *link : pad->links()) {
-				if (link->flags() & MEDIA_LNK_FL_IMMUTABLE)
-					continue;
+            for (MediaLink *link : pad->links()) {
+                if (link->flags() & MEDIA_LNK_FL_IMMUTABLE)
+                    continue;
 
-				int ret = link->setEnabled(false);
-				if (ret)
-					return ret;
-			}
-		}
-	}
+                int ret = link->setEnabled(false);
+                if (ret)
+                    return ret;
+            }
+        }
+    }
 
-	return 0;
+    return 0;
 }
 
 /**
@@ -472,21 +518,23 @@ int MediaDevice::disableLinks()
  */
 int MediaDevice::open()
 {
-	if (fd_.isValid()) {
-		LOG(MediaDevice, Error) << "MediaDevice already open";
-		return -EBUSY;
-	}
+    if (fd_ > 0) {
+//        std::cout << "MediaDevice already open" << std::endl;
+//                LOG(MediaDevice, Error) << "MediaDevice already open";
+        return -EBUSY;
+    }
 
-	fd_ = UniqueFD(::open(deviceNode_.c_str(), O_RDWR | O_CLOEXEC));
-	if (!fd_.isValid()) {
-		int ret = -errno;
-		LOG(MediaDevice, Error)
-			<< "Failed to open media device at "
-			<< deviceNode_ << ": " << strerror(-ret);
-		return ret;
-	}
+    fd_ = ::open(deviceNode_.c_str(), O_RDWR | O_CLOEXEC);
+    if (fd_ <= 0) {
+        int ret = -errno;
+//        std::cout << "Failed to open media device at " << deviceNode_ << ": " << strerror(-ret) << std::endl;
+        //        LOG(MediaDevice, Error)
+        //                << "Failed to open media device at "
+        //                << deviceNode_ << ": " << strerror(-ret);
+        return ret;
+    }
 
-	return 0;
+    return 0;
 }
 
 /**
@@ -504,7 +552,7 @@ int MediaDevice::open()
  */
 void MediaDevice::close()
 {
-	fd_.reset();
+    fd_ = -1;
 }
 
 /**
@@ -519,8 +567,8 @@ void MediaDevice::close()
  */
 MediaObject *MediaDevice::object(unsigned int id)
 {
-	auto it = objects_.find(id);
-	return (it == objects_.end()) ? nullptr : it->second;
+    auto it = objects_.find(id);
+    return (it == objects_.end()) ? nullptr : it->second;
 }
 
 /**
@@ -536,16 +584,16 @@ MediaObject *MediaDevice::object(unsigned int id)
 bool MediaDevice::addObject(MediaObject *object)
 {
 
-	if (objects_.find(object->id()) != objects_.end()) {
-		LOG(MediaDevice, Error)
-			<< "Element with id " << object->id()
-			<< " already enumerated.";
-		return false;
-	}
+    if (objects_.find(object->id()) != objects_.end()) {
+        //        LOG(MediaDevice, Error)
+        //                << "Element with id " << object->id()
+        //                << " already enumerated.";
+        return false;
+    }
 
-	objects_[object->id()] = object;
+    objects_[object->id()] = object;
 
-	return true;
+    return true;
 }
 
 /**
@@ -561,12 +609,12 @@ bool MediaDevice::addObject(MediaObject *object)
  */
 void MediaDevice::clear()
 {
-	for (auto const &o : objects_)
-		delete o.second;
+    for (auto const &o : objects_)
+        delete o.second;
 
-	objects_.clear();
-	entities_.clear();
-	valid_ = false;
+    objects_.clear();
+    entities_.clear();
+    valid_ = false;
 }
 
 /**
@@ -581,36 +629,36 @@ void MediaDevice::clear()
  * \return A pointer to the interface if found, or nullptr otherwise
  */
 struct media_v2_interface *MediaDevice::findInterface(const struct media_v2_topology &topology,
-						      unsigned int entityId)
+                                                      unsigned int entityId)
 {
-	struct media_v2_link *links = reinterpret_cast<struct media_v2_link *>
-						      (topology.ptr_links);
-	unsigned int ifaceId = 0;
-	unsigned int i;
+    struct media_v2_link *links = reinterpret_cast<struct media_v2_link *>
+                                      (topology.ptr_links);
+    unsigned int ifaceId = 0;
+    unsigned int i;
 
-	for (i = 0; i < topology.num_links; ++i) {
-		/* Search for the interface to entity link. */
-		if (links[i].sink_id != entityId)
-			continue;
+    for (i = 0; i < topology.num_links; ++i) {
+        /* Search for the interface to entity link. */
+        if (links[i].sink_id != entityId)
+            continue;
 
-		if ((links[i].flags & MEDIA_LNK_FL_LINK_TYPE) !=
-		    MEDIA_LNK_FL_INTERFACE_LINK)
-			continue;
+        if ((links[i].flags & MEDIA_LNK_FL_LINK_TYPE) !=
+                MEDIA_LNK_FL_INTERFACE_LINK)
+            continue;
 
-		ifaceId = links[i].source_id;
-		break;
-	}
-	if (i == topology.num_links)
-		return nullptr;
+        ifaceId = links[i].source_id;
+        break;
+    }
+    if (i == topology.num_links)
+        return nullptr;
 
-	struct media_v2_interface *ifaces = reinterpret_cast<struct media_v2_interface *>
-					    (topology.ptr_interfaces);
-	for (i = 0; i < topology.num_interfaces; ++i) {
-		if (ifaces[i].id == ifaceId)
-			return &ifaces[i];
-	}
+    struct media_v2_interface *ifaces = reinterpret_cast<struct media_v2_interface *>
+                                            (topology.ptr_interfaces);
+    for (i = 0; i < topology.num_interfaces; ++i) {
+        if (ifaces[i].id == ifaceId)
+            return &ifaces[i];
+    }
 
-	return nullptr;
+    return nullptr;
 }
 
 /*
@@ -619,143 +667,143 @@ struct media_v2_interface *MediaDevice::findInterface(const struct media_v2_topo
  */
 bool MediaDevice::populateEntities(const struct media_v2_topology &topology)
 {
-	struct media_v2_entity *mediaEntities = reinterpret_cast<struct media_v2_entity *>
-						(topology.ptr_entities);
+    struct media_v2_entity *mediaEntities = reinterpret_cast<struct media_v2_entity *>
+                                                (topology.ptr_entities);
 
-	for (unsigned int i = 0; i < topology.num_entities; ++i) {
-		struct media_v2_entity *ent = &mediaEntities[i];
+    for (unsigned int i = 0; i < topology.num_entities; ++i) {
+        struct media_v2_entity *ent = &mediaEntities[i];
 
-		/*
-		 * The media_v2_entity structure was missing the flag field before
-		 * v4.19.
-		 */
-		if (!MEDIA_V2_ENTITY_HAS_FLAGS(version_))
-			fixupEntityFlags(ent);
+        /*
+         * The media_v2_entity structure was missing the flag field before
+         * v4.19.
+         */
+        if (!MEDIA_V2_ENTITY_HAS_FLAGS(version_))
+            fixupEntityFlags(ent);
 
-		/*
-		 * Find the interface linked to this entity to get the device
-		 * node major and minor numbers.
-		 */
-		struct media_v2_interface *iface =
-			findInterface(topology, ent->id);
-		MediaEntity *entity = new MediaEntity(this, ent, iface);
+        /*
+         * Find the interface linked to this entity to get the device
+         * node major and minor numbers.
+         */
+        struct media_v2_interface *iface =
+            findInterface(topology, ent->id);
+        MediaEntity *entity = new MediaEntity(this, ent, iface);
 
-		if (!addObject(entity)) {
-			delete entity;
-			return false;
-		}
+        if (!addObject(entity)) {
+            delete entity;
+            return false;
+        }
 
-		entities_.push_back(entity);
-	}
+        entities_.push_back(entity);
+    }
 
-	return true;
+    return true;
 }
 
 bool MediaDevice::populatePads(const struct media_v2_topology &topology)
 {
-	struct media_v2_pad *mediaPads = reinterpret_cast<struct media_v2_pad *>
-					 (topology.ptr_pads);
+    struct media_v2_pad *mediaPads = reinterpret_cast<struct media_v2_pad *>
+                                         (topology.ptr_pads);
 
-	for (unsigned int i = 0; i < topology.num_pads; ++i) {
-		unsigned int entity_id = mediaPads[i].entity_id;
+    for (unsigned int i = 0; i < topology.num_pads; ++i) {
+        unsigned int entity_id = mediaPads[i].entity_id;
 
-		/* Store a reference to this MediaPad in entity. */
-		MediaEntity *mediaEntity = dynamic_cast<MediaEntity *>
-					   (object(entity_id));
-		if (!mediaEntity) {
-			LOG(MediaDevice, Error)
-				<< "Failed to find entity with id: "
-				<< entity_id;
-			return false;
-		}
+        /* Store a reference to this MediaPad in entity. */
+        MediaEntity *mediaEntity = dynamic_cast<MediaEntity *>
+                                   (object(entity_id));
+        if (!mediaEntity) {
+            //            LOG(MediaDevice, Error)
+            //                    << "Failed to find entity with id: "
+            //                    << entity_id;
+            return false;
+        }
 
-		MediaPad *pad = new MediaPad(&mediaPads[i], mediaEntity);
-		if (!addObject(pad)) {
-			delete pad;
-			return false;
-		}
+        MediaPad *pad = new MediaPad(&mediaPads[i], mediaEntity);
+        if (!addObject(pad)) {
+            delete pad;
+            return false;
+        }
 
-		mediaEntity->addPad(pad);
-	}
+        mediaEntity->addPad(pad);
+    }
 
-	return true;
+    return true;
 }
 
 bool MediaDevice::populateLinks(const struct media_v2_topology &topology)
 {
-	struct media_v2_link *mediaLinks = reinterpret_cast<struct media_v2_link *>
-					   (topology.ptr_links);
+    struct media_v2_link *mediaLinks = reinterpret_cast<struct media_v2_link *>
+                                           (topology.ptr_links);
 
-	for (unsigned int i = 0; i < topology.num_links; ++i) {
-		if ((mediaLinks[i].flags & MEDIA_LNK_FL_LINK_TYPE) ==
-		    MEDIA_LNK_FL_INTERFACE_LINK)
-			continue;
+    for (unsigned int i = 0; i < topology.num_links; ++i) {
+        if ((mediaLinks[i].flags & MEDIA_LNK_FL_LINK_TYPE) ==
+                MEDIA_LNK_FL_INTERFACE_LINK)
+            continue;
 
-		/* Look up the source and sink objects. */
-		unsigned int source_id = mediaLinks[i].source_id;
-		MediaObject *source = object(source_id);
-		if (!source) {
-			LOG(MediaDevice, Error)
-				<< "Failed to find MediaObject with id "
-				<< source_id;
-			return false;
-		}
+        /* Look up the source and sink objects. */
+        unsigned int source_id = mediaLinks[i].source_id;
+        MediaObject *source = object(source_id);
+        if (!source) {
+            //            LOG(MediaDevice, Error)
+            //                    << "Failed to find MediaObject with id "
+            //                    << source_id;
+            return false;
+        }
 
-		unsigned int sink_id = mediaLinks[i].sink_id;
-		MediaObject *sink = object(sink_id);
-		if (!sink) {
-			LOG(MediaDevice, Error)
-				<< "Failed to find MediaObject with id "
-				<< sink_id;
-			return false;
-		}
+        unsigned int sink_id = mediaLinks[i].sink_id;
+        MediaObject *sink = object(sink_id);
+        if (!sink) {
+            //            LOG(MediaDevice, Error)
+            //                    << "Failed to find MediaObject with id "
+            //                    << sink_id;
+            return false;
+        }
 
-		switch (mediaLinks[i].flags & MEDIA_LNK_FL_LINK_TYPE) {
-		case MEDIA_LNK_FL_DATA_LINK: {
-			MediaPad *sourcePad = dynamic_cast<MediaPad *>(source);
-			MediaPad *sinkPad = dynamic_cast<MediaPad *>(sink);
-			if (!source || !sink) {
-				LOG(MediaDevice, Error)
-					<< "Source or sink is not a pad";
-				return false;
-			}
+        switch (mediaLinks[i].flags & MEDIA_LNK_FL_LINK_TYPE) {
+        case MEDIA_LNK_FL_DATA_LINK: {
+            MediaPad *sourcePad = dynamic_cast<MediaPad *>(source);
+            MediaPad *sinkPad = dynamic_cast<MediaPad *>(sink);
+            if (!source || !sink) {
+                //                LOG(MediaDevice, Error)
+                //                        << "Source or sink is not a pad";
+                return false;
+            }
 
-			MediaLink *link = new MediaLink(&mediaLinks[i],
-							sourcePad, sinkPad);
-			if (!addObject(link)) {
-				delete link;
-				return false;
-			}
+            MediaLink *link = new MediaLink(&mediaLinks[i],
+                                            sourcePad, sinkPad);
+            if (!addObject(link)) {
+                delete link;
+                return false;
+            }
 
-			link->source()->addLink(link);
-			link->sink()->addLink(link);
+            link->source()->addLink(link);
+            link->sink()->addLink(link);
 
-			break;
-		}
+            break;
+        }
 
-		case MEDIA_LNK_FL_ANCILLARY_LINK: {
-			MediaEntity *primary = dynamic_cast<MediaEntity *>(source);
-			MediaEntity *ancillary = dynamic_cast<MediaEntity *>(sink);
-			if (!primary || !ancillary) {
-				LOG(MediaDevice, Error)
-					<< "Source or sink is not an entity";
-				return false;
-			}
+        case MEDIA_LNK_FL_ANCILLARY_LINK: {
+            MediaEntity *primary = dynamic_cast<MediaEntity *>(source);
+            MediaEntity *ancillary = dynamic_cast<MediaEntity *>(sink);
+            if (!primary || !ancillary) {
+                //                LOG(MediaDevice, Error)
+                //                        << "Source or sink is not an entity";
+                return false;
+            }
 
-			primary->addAncillaryEntity(ancillary);
+            primary->addAncillaryEntity(ancillary);
 
-			break;
-		}
+            break;
+        }
 
-		default:
-			LOG(MediaDevice, Warning)
-				<< "Unknown media link type";
+        default:
+            //            LOG(MediaDevice, Warning)
+            //                    << "Unknown media link type";
 
-			break;
-		}
-	}
+            break;
+        }
+    }
 
-	return true;
+    return true;
 }
 
 /**
@@ -768,19 +816,18 @@ bool MediaDevice::populateLinks(const struct media_v2_topology &topology)
  */
 void MediaDevice::fixupEntityFlags(struct media_v2_entity *entity)
 {
-	struct media_entity_desc desc = {};
-	desc.id = entity->id;
+    struct media_entity_desc desc = {};
+    desc.id = entity->id;
 
-	int ret = ioctl(fd_.get(), MEDIA_IOC_ENUM_ENTITIES, &desc);
-	if (ret < 0) {
-		ret = -errno;
-		LOG(MediaDevice, Debug)
-			<< "Failed to retrieve information for entity "
-			<< entity->id << ": " << strerror(-ret);
-		return;
-	}
-
-	entity->flags = desc.flags;
+    int ret = ioctl(fd_, MEDIA_IOC_ENUM_ENTITIES, &desc);
+    if (ret < 0) {
+        ret = -errno;
+        //        LOG(MediaDevice, Debug)
+        //                << "Failed to retrieve information for entity "
+        //                << entity->id << ": " << strerror(-ret);
+        return;
+    }
+//    entity->flags = desc.flags;
 }
 
 /**
@@ -800,40 +847,40 @@ void MediaDevice::fixupEntityFlags(struct media_v2_entity *entity)
  */
 int MediaDevice::setupLink(const MediaLink *link, unsigned int flags)
 {
-	struct media_link_desc linkDesc = {};
-	MediaPad *source = link->source();
-	MediaPad *sink = link->sink();
+    struct media_link_desc linkDesc = {};
+    MediaPad *source = link->source();
+    MediaPad *sink = link->sink();
 
-	linkDesc.source.entity = source->entity()->id();
-	linkDesc.source.index = source->index();
-	linkDesc.source.flags = MEDIA_PAD_FL_SOURCE;
+    linkDesc.source.entity = source->entity()->id();
+    linkDesc.source.index = source->index();
+    linkDesc.source.flags = MEDIA_PAD_FL_SOURCE;
 
-	linkDesc.sink.entity = sink->entity()->id();
-	linkDesc.sink.index = sink->index();
-	linkDesc.sink.flags = MEDIA_PAD_FL_SINK;
+    linkDesc.sink.entity = sink->entity()->id();
+    linkDesc.sink.index = sink->index();
+    linkDesc.sink.flags = MEDIA_PAD_FL_SINK;
 
-	linkDesc.flags = flags;
+    linkDesc.flags = flags;
 
-	int ret = ioctl(fd_.get(), MEDIA_IOC_SETUP_LINK, &linkDesc);
-	if (ret) {
-		ret = -errno;
-		LOG(MediaDevice, Error)
-			<< "Failed to setup link "
-			<< source->entity()->name() << "["
-			<< source->index() << "] -> "
-			<< sink->entity()->name() << "["
-			<< sink->index() << "]: "
-			<< strerror(-ret);
-		return ret;
-	}
+    int ret = ioctl(fd_, MEDIA_IOC_SETUP_LINK, &linkDesc);
+    if (ret) {
+        ret = -errno;
+        //        LOG(MediaDevice, Error)
+        //                << "Failed to setup link "
+        //                << source->entity()->name() << "["
+        //                << source->index() << "] -> "
+        //                << sink->entity()->name() << "["
+        //                << sink->index() << "]: "
+        //                << strerror(-ret);
+        return ret;
+    }
 
-	LOG(MediaDevice, Debug)
-		<< source->entity()->name() << "["
-		<< source->index() << "] -> "
-		<< sink->entity()->name() << "["
-		<< sink->index() << "]: " << flags;
+    //    LOG(MediaDevice, Debug)
+    //            << source->entity()->name() << "["
+    //            << source->index() << "] -> "
+    //            << sink->entity()->name() << "["
+    //            << sink->index() << "]: " << flags;
 
-	return 0;
+    return 0;
 }
 
 } /* namespace libcamera */

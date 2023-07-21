@@ -5,7 +5,7 @@
  * media_object.cpp - Media device objects: entities, pads and links
  */
 
-#include "libcamera/internal/media_object.h"
+#include "media_object.h"
 
 #include <errno.h>
 #include <string>
@@ -15,9 +15,9 @@
 
 #include <linux/media.h>
 
-#include <libcamera/base/log.h>
+//#include <libcamera/base/log.h>
 
-#include "libcamera/internal/media_device.h"
+#include "media_device.h"
 
 /**
  * \file media_object.h
@@ -40,7 +40,7 @@
 
 namespace libcamera {
 
-LOG_DECLARE_CATEGORY(MediaDevice)
+//LOG_DECLARE_CATEGORY(MediaDevice)
 
 /**
  * \class MediaObject
@@ -121,16 +121,16 @@ LOG_DECLARE_CATEGORY(MediaDevice)
  */
 int MediaLink::setEnabled(bool enable)
 {
-	unsigned int flags = (flags_ & ~MEDIA_LNK_FL_ENABLED)
-			   | (enable ? MEDIA_LNK_FL_ENABLED : 0);
+    unsigned int flags = (flags_ & ~MEDIA_LNK_FL_ENABLED)
+                         | (enable ? MEDIA_LNK_FL_ENABLED : 0);
 
-	int ret = dev_->setupLink(this, flags);
-	if (ret)
-		return ret;
+    int ret = dev_->setupLink(this, flags);
+    if (ret)
+        return ret;
 
-	flags_ = flags;
+    flags_ = flags;
 
-	return 0;
+    return 0;
 }
 
 /**
@@ -140,9 +140,9 @@ int MediaLink::setEnabled(bool enable)
  * \param[in] sink The sink pad at the destination of the link
  */
 MediaLink::MediaLink(const struct media_v2_link *link, MediaPad *source,
-		     MediaPad *sink)
-	: MediaObject(source->device(), link->id), source_(source),
-	  sink_(sink), flags_(link->flags)
+                     MediaPad *sink)
+    : MediaObject(source->device(), link->id), source_(source),
+      sink_(sink), flags_(link->flags)
 {
 }
 
@@ -192,8 +192,8 @@ MediaLink::MediaLink(const struct media_v2_link *link, MediaPad *source,
  * \param[in] entity The entity the pad belongs to
  */
 MediaPad::MediaPad(const struct media_v2_pad *pad, MediaEntity *entity)
-	: MediaObject(entity->device(), pad->id), index_(pad->index), entity_(entity),
-	  flags_(pad->flags)
+    : MediaObject(entity->device(), pad->id), entity_(entity),
+      flags_(pad->flags)
 {
 }
 
@@ -232,7 +232,7 @@ MediaPad::MediaPad(const struct media_v2_pad *pad, MediaEntity *entity)
  */
 void MediaPad::addLink(MediaLink *link)
 {
-	links_.push_back(link);
+    links_.push_back(link);
 }
 
 /**
@@ -333,12 +333,12 @@ void MediaPad::addLink(MediaLink *link)
  */
 const MediaPad *MediaEntity::getPadByIndex(unsigned int index) const
 {
-	for (MediaPad *p : pads_) {
-		if (p->index() == index)
-			return p;
-	}
+    for (MediaPad *p : pads_) {
+        if (p->index() == index)
+            return p;
+    }
 
-	return nullptr;
+    return nullptr;
 }
 
 /**
@@ -348,12 +348,12 @@ const MediaPad *MediaEntity::getPadByIndex(unsigned int index) const
  */
 const MediaPad *MediaEntity::getPadById(unsigned int id) const
 {
-	for (MediaPad *p : pads_) {
-		if (p->id() == id)
-			return p;
-	}
+    for (MediaPad *p : pads_) {
+        if (p->id() == id)
+            return p;
+    }
 
-	return nullptr;
+    return nullptr;
 }
 
 /**
@@ -363,19 +363,19 @@ const MediaPad *MediaEntity::getPadById(unsigned int id) const
  */
 int MediaEntity::setDeviceNode(const std::string &deviceNode)
 {
-	/* Make sure the device node can be accessed. */
-	int ret = ::access(deviceNode.c_str(), R_OK | W_OK);
-	if (ret < 0) {
-		ret = -errno;
-		LOG(MediaDevice, Error)
-			<< "Device node " << deviceNode << " can't be accessed: "
-			<< strerror(-ret);
-		return ret;
-	}
+    /* Make sure the device node can be accessed. */
+    int ret = ::access(deviceNode.c_str(), R_OK | W_OK);
+    if (ret < 0) {
+        ret = -errno;
+        //        LOG(MediaDevice, Error)
+        //                << "Device node " << deviceNode << " can't be accessed: "
+        //                << strerror(-ret);
+        return ret;
+    }
 
-	deviceNode_ = deviceNode;
+    deviceNode_ = deviceNode;
 
-	return 0;
+    return 0;
 }
 
 /**
@@ -385,29 +385,29 @@ int MediaEntity::setDeviceNode(const std::string &deviceNode)
  * \param[in] iface The entity interface data (may be null)
  */
 MediaEntity::MediaEntity(MediaDevice *dev,
-			 const struct media_v2_entity *entity,
-			 const struct media_v2_interface *iface)
-	: MediaObject(dev, entity->id), name_(entity->name),
-	  function_(entity->function), flags_(entity->flags),
-	  type_(Type::MediaEntity), major_(0), minor_(0)
+                         const struct media_v2_entity *entity,
+                         const struct media_v2_interface *iface)
+    : MediaObject(dev, entity->id), name_(entity->name),
+      function_(entity->function),
+      type_(Type::MediaEntity), major_(0), minor_(0)
 {
-	if (!iface)
-		return;
+    if (!iface)
+        return;
 
-	switch (iface->intf_type) {
-	case MEDIA_INTF_T_V4L_VIDEO:
-		type_ = Type::V4L2VideoDevice;
-		break;
-	case MEDIA_INTF_T_V4L_SUBDEV:
-		type_ = Type::V4L2Subdevice;
-		break;
-	default:
-		type_ = Type::Invalid;
-		return;
-	}
+    switch (iface->intf_type) {
+    case MEDIA_INTF_T_V4L_VIDEO:
+        type_ = Type::V4L2VideoDevice;
+        break;
+    case MEDIA_INTF_T_V4L_SUBDEV:
+        type_ = Type::V4L2Subdevice;
+        break;
+    default:
+        type_ = Type::Invalid;
+        return;
+    }
 
-	major_ = iface->devnode.major;
-	minor_ = iface->devnode.minor;
+    major_ = iface->devnode.major;
+    minor_ = iface->devnode.minor;
 }
 
 /**
@@ -420,7 +420,7 @@ MediaEntity::MediaEntity(MediaDevice *dev,
  */
 void MediaEntity::addPad(MediaPad *pad)
 {
-	pads_.push_back(pad);
+    pads_.push_back(pad);
 }
 
 /**
@@ -429,7 +429,7 @@ void MediaEntity::addPad(MediaPad *pad)
  */
 void MediaEntity::addAncillaryEntity(MediaEntity *ancillaryEntity)
 {
-	ancillaryEntities_.push_back(ancillaryEntity);
+    ancillaryEntities_.push_back(ancillaryEntity);
 }
 
 /**
